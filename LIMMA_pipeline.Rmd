@@ -1,0 +1,167 @@
+---
+title: "LIMMA"
+author: "gideonsamuel"
+date: "2025-09-13"
+output: html_document
+---
+Import the required libraries to perform LIMMA.
+
+```{r}
+library(GEOquery)
+library(limma)
+library(ggplot2)
+library(pheatmap)
+```
+
+Retrieve expression data from GEO using an accession ID.
+
+```{r}
+id <- "GSE70970"
+e_set <- getGEO(id, GSEMatrix = TRUE)
+e_set <- e_set[[1]]
+```
+
+Separating Each data(Phenotype Data/MetaData and Expression Data/Matrix).
+
+```{r}
+expn_sep <- exprs(e_set)
+pheno_sep <- pData(e_set)
+```
+
+Explore metadata to understand sample grouping.
+
+```{r}
+colnames(pheno_sep)
+head(pheno_sep)
+```
+
+After Identifying the groups,(Control/Treated) and Subset samples to include only groups of interest.
+
+```{r}
+pheno_sub <- pheno_sep[pheno_sep$`t:ch1` %in% c("T1","T3"), ]
+expn_sub <- expn_sep[, rownames(pheno_sub)]
+```
+
+Check sample distribution and matrix dimensions.
+
+```{r}
+table(pheno_sub$`t:ch1`)
+dim(expn_sub)
+```
+
+Filter out genes with zero variance across samples. 
+
+```{r}
+library(matrixStats)
+summary(rowVars(expn_sub))
+```
+
+Keep only genes with non-zero variance.
+
+```{r}
+keep <- rowVars(expn_sub) > 0
+expn_sub <- expn_sub[keep, ]
+```
+
+Define group factor for downstream design matrix.
+
+```{r}
+x <- factor(pheno_sub$`t:ch1`)
+head(x)
+```
+Frequency table to know how many samples belong to each group. Size checking.
+
+```{r}
+table(x)
+```
+
+Retrieve annotation/platform information (e.g., gene IDs, probe IDs).
+
+```{r}
+g_plat <- getGEO(annotation(e_set))
+box <- Table(g_plat)
+head(box)
+```
+
+Build design matrix (indicates group membership for LIMMA). and inspecting them.
+
+```{r}
+design <- model.matrix(~0+x)
+colnames(design) <- levels(x)
+rownames(design) <- colnames(expn_sub)
+```
+
+```{r}
+head(design)
+dim(design)
+```
+
+Fit linear model to expression data.
+
+```{r}
+fit <- lmFit(expn_sub, design)
+```
+
+Define contrasts (comparison of two groups)
+
+```{r}
+contrast_mat <- makeContrasts(T3-T1, levels = design)
+```
+
+Apply contrast and empirical Bayes moderation.
+
+```{r}
+fit2 <- contrasts.fit(fit, contrast_mat)
+fit2 <- eBayes(fit2)
+```
+
+Extract top Differential Expression results.
+
+```{r}
+result <- topTable(fit2, adjust="fdr", number=Inf)
+head(result)
+```
+
+Summarize Differential Expression results.
+
+```{r}
+# Number of significant DE genes
+sum(result$adj.P.Val < 0.05)
+
+# Top 10 most upregulated genes
+head(result[order(-result$logFC), ], 10)
+
+# Top 10 most downregulated genes
+head(result[order(result$logFC), ], 10)
+```
+
+PCA and Heatmap of top variable genes.
+
+```{r}
+expn_transpose <- t(expn_sub)
+
+pca <- prcomp(expn_transpose, scale. = TRUE)
+pca_df <- data.frame(PC1 = pca$x[,1],
+                     PC2 = pca$x[,2],
+                     Group = pheno_sub$`t:ch1`)
+
+ggplot(pca_df, aes(x = PC1, y = PC2, color = Group)) +
+  geom_point(size = 3) +
+  theme_minimal() +
+  labs(title = "PCA: T1 vs T3 samples", x = "PC1", y = "PC2")
+
+
+
+top_var_genes <- order(rowVars(expn_sub), decreasing = TRUE)[1:20]
+expn_top <- expn_sub[top_var_genes, ]
+
+annotation_col <- data.frame(Group = pheno_sub$`t:ch1`)
+rownames(annotation_col) <- colnames(expn_top)
+
+pheatmap(expn_top,
+         scale = "row",
+         annotation_col =annotation_col,
+         show_rownames = FALSE,
+         main = "Top 20 most variable genes")
+
+```
